@@ -8,7 +8,7 @@
 
 #pragma pack(push, 1) 
 	struct T_Info {
-		BYTE	polarity;	// 極性フラグ 0x20:SDTV? 0x40:HDTV? 
+		BYTE	polarity;	// 極性フラグ 0x20:SDTV? 0x40:HDTV?  0x10:Interlace?
 		WORD	width;
 		WORD	height;
 		WORD	hfreq;
@@ -20,6 +20,24 @@
 		WORD	hstart;
 		WORD	vstart;
 	};
+
+	// RTD2668
+	struct T_Info_23 {
+		BYTE	no;
+		BYTE	type;
+		BYTE	polarity;	// 極性フラグ 0x20:SDTV? 0x40:HDTV?  0x10:Interlace?
+		WORD	width;
+		WORD	height;
+		WORD	hfreq;
+		WORD	vfreq;
+		BYTE	htolerance;
+		BYTE	vtolerance;
+		WORD	htotal;
+		WORD	vtotal;
+		WORD	hstart;
+		WORD	vstart;
+		WORD	vcount;
+	};
 #pragma pack(pop) 
 
 enum enModel
@@ -30,10 +48,28 @@ enum enModel
 	LHRD56_1366x768,	
 	M_RT2556_FHD,		// 黒ジャック基板にgithubで見つけたファームウェア適用
 	PHI_252B9,			// PHILIPS 252B9/11
-
+	PCB800099,			// RTD2662使用基板
+	RTD2668
 };
 
-void FindString(BYTE *buf, int nLength)
+enum enIndex
+{
+	X68_15K_I,
+	X68_15K_P,
+	X68_24K_I,
+	X68_24K_P,
+	X68_31K,
+	X68_31K_MT,	// memtest68K
+	X68_Dash,
+	M72_RTYPE,
+	FMT_Raiden,
+	MAX_INDEX
+};
+
+BYTE *buf = NULL;
+int nModeTableStart = 0;
+
+void FindString(int nLength)
 {
 
 	const char CharTbl[256] = {
@@ -93,22 +129,24 @@ void FindString(BYTE *buf, int nLength)
 	}
 }
 
-int FindModeTable(BYTE *buf, int nLength, int &nCount)
+template <typename T>
+int FindModeTable(int nLength, int &nCount)
 {
-	int nStart = -1;
+	int nStart = -1, nSearchStart = 0;
 
 	nCount = 0;
 
+L_RETRY:
 	int nInfoSize = sizeof(T_Info);
-	for (int i=0; i<nLength-nInfoSize*2; i++) {
-		T_Info *pInfo1 = (T_Info *)&buf[i];
-		T_Info *pInfo2 = (T_Info *)&buf[i+nInfoSize];
+	for (int i=nSearchStart; i<nLength-nInfoSize*2; i++) {
+		T *pInfo1 = (T *)&buf[i];
+		T *pInfo2 = (T*)&buf[i+nInfoSize];
 		short nWidth = ntohs(pInfo1->width);
 		if (640 <= nWidth && nWidth <= 4096 &&
-			((pInfo1->htolerance == 10 && pInfo1->vtolerance == 10 &&
-			 (pInfo2->htolerance == 10 && pInfo2->vtolerance == 10) || 
-			 (pInfo1->htolerance == 10 && pInfo1->vtolerance == 12 &&
-			 (pInfo2->htolerance == 10 && pInfo2->vtolerance == 12))))) {
+			5 <= pInfo1->htolerance && pInfo1->htolerance <= 10 &&
+			5 <= pInfo1->vtolerance && pInfo1->vtolerance <= 10 &&
+			5 <= pInfo2->htolerance && pInfo2->htolerance <= 10 &&
+			5 <= pInfo2->vtolerance && pInfo2->vtolerance <= 10) {
 			nStart = i;
 			break;
 		}
@@ -126,11 +164,16 @@ int FindModeTable(BYTE *buf, int nLength, int &nCount)
 			nCount++;
 		}
 	}
+	if (nCount == 0 && 0 <= nStart) {
+		nSearchStart = nStart+1;
+		goto L_RETRY;
+	}
 
 	return nStart;
 }
 
-void DumpModeTableRecord(FILE *fpCsv, T_Info *pInfo, int nNo, int nOffset)
+template <typename T>
+void DumpModeTableRecord(FILE *fpCsv, T *pInfo, int nNo, int nOffset)
 {
 	short	nWidth, nHeight, nHFreq, nVFreq, nHTotal, nVTotal, nHStart, nVStart;
 
@@ -182,10 +225,8 @@ void DumpModeTableRecord(FILE *fpCsv, T_Info *pInfo, int nNo, int nOffset)
 	_fputts(str, fpCsv);
 }
 
-int Rewrite(
-FILE	*fpCsv,
-BYTE	*buf,	
-int		nModeTableStart,
+template <typename T>
+int SetParameter(
 int		nModeTableNo,
 char	cPolarity,
 WORD	nWidth,
@@ -199,8 +240,8 @@ WORD	nVTotal,
 WORD	nHStart,
 WORD	nVStart
 )
-{	int nOffset = nModeTableStart+sizeof(T_Info)*nModeTableNo;
-	struct T_Info *pInfo = (T_Info *)&buf[nOffset];	
+{	int nOffset = nModeTableStart+sizeof(T)*nModeTableNo;
+	T *pInfo = (T *)&buf[nOffset];	
 
 	if (0 < cPolarity) pInfo->polarity = cPolarity;
 	if (0 < nWidth) pInfo->width = htons(nWidth);
@@ -222,16 +263,16 @@ WORD	nVStart
 
 int _tmain(int argc, _TCHAR* argv[])
 {
-	int i, ret, nFileLen, nModeTableStart, nModeTableCount, nOffset;
+	int i, ret, nFileLen, nModeTableCount, nOffset;
+	int	nIdxNo[MAX_INDEX] = {-1};
 	TCHAR	szPath[MAX_PATH], szDrive[_MAX_DRIVE], szDir[_MAX_DIR], szFilename[_MAX_FNAME], szExt[_MAX_EXT];
 	FILE *fp = NULL;
 	FILE *fpCsv = stdout;
 	FILE *fpOut = NULL;
-	BYTE *buf = NULL;
 	enModel	model = UNKNOWN;
 
 	if (argc < 2) {
-		_ftprintf(stderr, _T("%s firmware-path (-rewrite)\n"), argv[0]);
+		_ftprintf(stderr, _T("%s firmware-path (-modify)\n"), argv[0]);
 		ret = 0;
 		goto L_RET;
 	}
@@ -243,16 +284,7 @@ int _tmain(int argc, _TCHAR* argv[])
 		goto L_RET;
 	}
 
-	_tsplitpath(argv[1], szDrive, szDir ,szFilename, szExt);
-	_tmakepath(szPath, szDrive, szDir, szFilename, _T(".csv"));
-	fpCsv = _tfopen(szPath, _T("wt"));
-	if (!fpCsv) {
-		_ftprintf(stderr, _T("can't open %s\n"), szPath);
-		ret = 2;
-		goto L_CLOSE;
-	}
-
-	nFileLen = _filelength(fileno(fp));
+	nFileLen = _filelength(_fileno(fp));
 	buf = (BYTE *)malloc(nFileLen);
 	if (!buf) {
 		_ftprintf(stderr, _T("can't alloc memory %d\n"), nFileLen);
@@ -279,59 +311,92 @@ int _tmain(int argc, _TCHAR* argv[])
 	return 0;
 	*/
 
-	nModeTableStart = FindModeTable(buf, nFileLen, nModeTableCount);
+	nModeTableStart = FindModeTable<T_Info>(nFileLen, nModeTableCount);
 	if (nModeTableStart < 0) {
-		_ftprintf(stderr, _T("can't find mode table\n"));
-		ret = 5;
-		goto L_FREE;
+		nModeTableStart = FindModeTable<T_Info_23>(nFileLen, nModeTableCount);
+		if (nModeTableStart < 0) {
+			_ftprintf(stderr, _T("can't find mode table\n"));
+			ret = 5;
+			goto L_FREE;
+		}
+		model = RTD2668;
 	}
 
-	// ﾓﾃﾞﾙ自動判定 ModeTable開始位置から判定 中華液晶基板ではﾌｧｰﾑｳｪｱが頻繁に変わるからあまり意味なし
-	// 手持ちのRealtekｺﾝﾄﾛｰﾗ使用ﾓﾆﾀはほとんどﾌﾟﾘｾｯﾄ内容同じだったんで判別する意味も無し…
-	if (0x200A == nModeTableStart) {	
-		model = P2314H;
-		FindString(buf, nFileLen);
-	}
-	else if (0x5819 == nModeTableStart) {	// LH-RD56(V+H)-01 例のiPad9.7型液晶を使用した15KHzモニタ用 2048x1536.bin
-		model = LHRD56_IPAD97;
-	}
-	else if (0xD97E == nModeTableStart) {	// 同上 1366x768 UIは黒ジャックと同じ？
-		model = LHRD56_1366x768;
-	}
-	else if (0x4803C == nModeTableStart) {	// 黒ジャック
-		model = M_RT2556_FHD;
-	}
-	else if (0x32A74 == nModeTableStart) {	// 252B9 P2314Hと同じプリセットだった
-		model = PHI_252B9;
+	// P2314Hの画面ﾓｰﾄﾞと使用ﾌﾟﾘｾｯﾄﾃｰﾌﾞﾙNoの紐づけ
+	nIdxNo[X68_15K_I] = 0;
+	nIdxNo[X68_15K_P] = 1;
+	nIdxNo[X68_24K_I] = 4;
+	nIdxNo[X68_24K_P] = 6;
+	nIdxNo[X68_31K] = 24;
+	nIdxNo[X68_31K_MT] = 18;	// 元の800x600ﾌﾟﾘｾｯﾄを上書き
+	nIdxNo[X68_Dash] = 26;
+	nIdxNo[M72_RTYPE] = 27;
+	nIdxNo[FMT_Raiden] = 28;
+	// 38-43も使ってもよさそう
+
+	if (model == UNKNOWN) {
+		// ﾓﾃﾞﾙ自動判定 ModeTable開始位置から判定 中華液晶基板ではﾌｧｰﾑｳｪｱが頻繁に変わるからあまり意味なし
+		switch (nModeTableStart) {
+		case 0x200A:	// P2314H
+			model = P2314H;
+			//FindString(nFileLen);
+			break;
+		case 0x32A74:	// 252B9
+			model = PHI_252B9;
+			// プリセットテーブルはP2314Hと同じ
+			break;
+		case 0x5819:	// LH-RD56(V+H)-01 例のiPad9.7型液晶を使用した15KHzモニタ用 2048x1536.bin
+			model = LHRD56_IPAD97;
+			nIdxNo[X68_15K_I] = 0;
+			nIdxNo[X68_15K_P] = 1;
+			nIdxNo[X68_24K_I] = 4;
+			nIdxNo[X68_24K_P] = 6;
+			nIdxNo[X68_31K] = 25;
+			nIdxNo[X68_31K_MT] = 19;	// 元の800x600ﾌﾟﾘｾｯﾄを上書き
+			nIdxNo[X68_Dash] = 27;
+			nIdxNo[M72_RTYPE] = 28;
+			nIdxNo[FMT_Raiden] = 37;
+			// 38-43も使ってもよさそう
+			break;
+		case 0xD97E:	// 同上 1366x768 UIは黒ジャックと同じ？
+			model = LHRD56_1366x768;
+			// プリセットテーブルはP2314Hとほぼ同じ
+			break;
+		case 0x4803C:	// M.RT2556 黒ジャック 1920x1080
+			model = M_RT2556_FHD;
+			// プリセットテーブルはP2314Hとほぼ同じ
+			break;
+		case 0x39c7:	// PCB800099(RTD2660/RTD2662)
+			model = PCB800099;
+			nIdxNo[X68_15K_I] = 0;
+			nIdxNo[X68_15K_P] = 3;
+			nIdxNo[X68_24K_I] = 4;
+			nIdxNo[X68_24K_P] = 13;
+			nIdxNo[X68_31K] = 18;
+			nIdxNo[X68_31K_MT] = 9;	// 元の800x600ﾌﾟﾘｾｯﾄを上書き
+			nIdxNo[X68_Dash] = 20;
+			nIdxNo[M72_RTYPE] = 21;
+			nIdxNo[FMT_Raiden] = 22;
+			// 22-31が空き
+			break;
+		}
 	}
 	
-	if (2 < argc && _tcsicmp(argv[2], _T("-modify")) == 0) {
-		// X68 15KHzノンインタレースは元からある1440x240の定義が使用されるから映る インタレースはテーブル定義されていない480i設定が使用される？
-		//Rewrite(fpCsv, buf, nModeTableStart, 87, 0, 1460, 240, 157, 600, 10, 10, 1716, 262, 238, 20);
-		Rewrite(fpCsv, buf, nModeTableStart, 139, 0, 1472, 240, 157, 600, 5, 5, 1716, 262, 238, 20); // こちらが使用される 許容誤差？を10->5
+	_tsplitpath(argv[1], szDrive, szDir ,szFilename, szExt);
+	if (2 < argc && _tcsicmp(argv[2], _T("-modify")) == 0 &&
+		model != UNKNOWN && model != RTD2668) {
+		//										 Pol   Wid   Hei  HFrq VFrq HT VT HTot  VTot HSB  VSB
+  		SetParameter<T_Info>(nIdxNo[X68_15K_I],  0x1F,  512, 480, 159, 615, 5, 5,  608, 521,  78, 24);		// X68000  512x512 15KHz(interlace) -> 標準の480iﾌﾟﾘｾｯﾄが使用されるため無効
+		SetParameter<T_Info>(nIdxNo[X68_15K_P],  0x0F,  512, 240, 159, 615, 5, 5,  608, 260,  80, 12);		// X68000  512x240 15KHz
+		SetParameter<T_Info>(nIdxNo[X68_24K_I],  0x1F, 1024, 848, 246, 532, 5, 5, 1408, 931, 282, 46);		// X68000 1024x848 24KHz(interlace) 偶数・奇数ライン逆？
+		SetParameter<T_Info>(nIdxNo[X68_24K_P],  0x0F, 1024, 424, 246, 532, 5, 5, 1408, 465, 282, 23);		// X68000 1024x424 24KHz
+		SetParameter<T_Info>(nIdxNo[X68_31K],    0x0F,  768, 512, 314, 554, 5, 5, 1104, 568, 261, 32);		// X68000  768x512 31KHz
+		//SetParameter<T_Info>(nIdxNo[X68_31K_MT], 0x0F,  768, 512, 338, 554, 5, 5, 1024, 613, 192, 35);		// X68000  768x512 31KHz memtest
+		SetParameter<T_Info>(nIdxNo[M72_RTYPE],  0x0F,  768, 256, 157, 550, 5, 5, 1024, 284, 156, 24);		// R-TYPE基板 15.7KHz/55Hz KAPPY.さん提供
+		SetParameter<T_Info>(nIdxNo[FMT_Raiden], 0x0F,  768, 512, 323, 603, 3, 3, 1104, 536, 240, 19);		// TOWNS 雷電伝説
+		//どうも縦像度240未満は動作しない？
+		//SetParameter<T_Info>(nIdxNo[FMT_Raiden]+1, 0x0F, 576, 224, 157, 591, 3, 3, 768, 263, 120, 24);		// MVS基板 15.7KHz/59.1Hz KAPPY.さん提供
 
-		// X68 24KHz
-		Rewrite(fpCsv, buf, nModeTableStart, 10, 0x0F, 1024, 424, 247, 531, 5, 5, 1408, 464, 158, 41);	// P2314ではHStartは258くらいがベスト
-
-		// X68 memtest68k→なぜか標準の31KHzと少し違うので専用プリセット用意
-		Rewrite(fpCsv, buf, nModeTableStart, 18, 0x0F, 768, 512, 340, 554, 10, 10, 1130, 612, 320, 41);
-
-		// X68 31KHz 
-		Rewrite(fpCsv, buf, nModeTableStart, 17, 0x0F, 768, 512, 315, 556, 5, 5, 1104, 568, 264, 41);	// P2314 HS:360x
-		Rewrite(fpCsv, buf, nModeTableStart, 24, 0x0F, 768, 536, 315, 543, 5, 5, 1176, 580, 308, 38);	// ダッシュ野郎
-
-		//Rewrite(fpCsv, buf, nModeTableStart, 14, 0x0F,672, 560, 315, 530, 5, 5, 1104, 595, 108, 5+26);	// Druaga→ダメぽ
-		//Rewrite(fpCsv, buf, nModeTableStart, 15, 0x0F, 640, 448, 242, 517, 10, 10, 944, 468, 234, 19);	// FZone 24K→ダメ
-		Rewrite(fpCsv, buf, nModeTableStart, 14, 0x0F,1472, 256, 157, 550, 3, 3, 1716, 283, 238, 20);		// R-TYPE基板 15.7KHz/55Hz KAPPY.さん提供
-		Rewrite(fpCsv, buf, nModeTableStart, 15, 0x0F,1472, 224, 157, 591, 3, 3, 1716, 262, 238, 20);		// MVS基板 15.7KHz/59.1Hz KAPPY.さん提供
-
-		// TOWNS SRMJ P2&P3
-		//Rewrite(fpCsv, buf, nModeTableStart, 9, 0x0F, 736, 480, 322, 611, 5, 5, 872, 525, 124, 36);
-		//Rewrite(fpCsv, buf, nModeTableStart, 16, 0x0F, 736, 480, 322, 611, 10, 10, 872, 525, 124, 36);
-		// TOWNS Raiden Trad
-		Rewrite(fpCsv, buf, nModeTableStart, 9, 0x0F, 768, 512, 323, 603, 3, 3, 1104, 536, 240, 19);
-
-		_tsplitpath(argv[1], szDrive, szDir ,szFilename, szExt);
 		_tcscat(szFilename, _T("_mod"));
 		_tmakepath(szPath, szDrive, szDir, szFilename, szExt);
 		fpOut = _tfopen(szPath, _T("wb"));
@@ -347,18 +412,29 @@ int _tmain(int argc, _TCHAR* argv[])
 		}
 	}
 
+	_tmakepath(szPath, szDrive, szDir, szFilename, _T(".csv"));
+	fpCsv = _tfopen(szPath, _T("wt"));
+	if (!fpCsv) {
+		_ftprintf(stderr, _T("can't open %s\n"), szPath);
+		ret = 2;
+		goto L_CLOSE;
+	}
 	nOffset = nModeTableStart;
 					//   0	        1         2         3         4         5         6         7         8        
 					//   123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
 	_ftprintf(fpCsv, _T("No ,Offset,PF  ,PolarityFlag           ,W   ,H   ,HFrq,VFrq,HTl,VTl,HTot,VTot,HSta,VSta\n"));
 	for (i=0; i<nModeTableCount; i++) {
-		struct T_Info *pInfo = (T_Info *)&buf[nOffset];
-		DumpModeTableRecord(fpCsv, pInfo, i, nOffset);
-		nOffset += sizeof(T_Info);
+		if (model == RTD2668) {
+			struct T_Info_23 *pInfo = (T_Info_23 *)&buf[nOffset];
+			DumpModeTableRecord<T_Info_23>(fpCsv, pInfo, i, nOffset);
+			nOffset += sizeof(T_Info_23);
+		}
+		else {
+			struct T_Info *pInfo = (T_Info *)&buf[nOffset];
+			DumpModeTableRecord<T_Info>(fpCsv, pInfo, i, nOffset);
+			nOffset += sizeof(T_Info);
+		}
 	}
-
-	//FindString(buf, nFileLen);
-
 
 	ret = 0;
 

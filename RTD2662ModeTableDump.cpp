@@ -6,6 +6,17 @@
 
 #include "stdafx.h"
 
+#ifndef BYTE
+#define	BYTE unsigned char
+#endif
+#ifndef WORD
+#define	WORD unsigned short
+#endif
+
+#ifndef WIN32
+#define	stricmp strcasecmp
+#endif
+
 #pragma pack(push, 1) 
 	struct T_Info {
 		BYTE	polarity;	// 極性フラグ 0x20:SDTV? 0x40:HDTV?  0x10:Interlace?
@@ -45,7 +56,7 @@ enum enModel
 	UNKNOWN = 0,
 	P2314H,				// DELL P2314H
 	LHRD56_IPAD97,		// 青ジャック基板にiPad 9.7型液晶を使用した15KHzモニタ用→なんか良い愛称ないんでしょうか
-	LHRD56_1366x768,	
+	LHRD56_1366x768,	// 同 1366x768液晶用ファーム
 	M_RT2556_FHD,		// 黒ジャック基板にgithubで見つけたファームウェア適用
 	PHI_252B9,			// PHILIPS 252B9/11
 	PCB800099,			// RTD2662使用基板
@@ -54,79 +65,56 @@ enum enModel
 
 enum enIndex
 {
-	X68_15K_I,
-	X68_15K_P,
-	X68_24K_I,
-	X68_24K_P,
-	X68_31K,
-	X68_31K_MT,	// memtest68K
-	X68_Dash,
-	M72_RTYPE,
-	FMT_Raiden,
+	X68_15K_I,		// X68000 15KHz Interlace
+	X68_15K_P,		// X68000 15KHz Progressive
+	X68_24K_I,		// X68000 24KHz Interlace
+	X68_24K_P,		// X68000 24KHz Progressive
+	X68_31K,		// X68000 31KHz
+	X68_Memtest,	// X68000 memtest68K 31KHz
+	X68_Dash,		// X68000 ダッシュ野郎 31KHz
+	X68_FZ24K,		// X68000 Fantasy Zone 24KHz
+	X68_Druaga,		// X68000 Druaga 31KHz
+	FMT_Raiden,		// FM TOWNS 雷電伝説 31KHz
+	FMT_SRMP2PS,	// FM TOWNS スーパーリアル麻雀P2&P3 31KHz
+	M72_RTYPE,		// IREM M72 R-TYPE 15KHz
+	MVS,			// NEO GEO MVS 15KHZ
 	MAX_INDEX
 };
 
 BYTE *buf = NULL;
 int nModeTableStart = 0;
+int nFileLen = 0;
 
-void FindString(int nLength)
+char *MakePath(const char *szBasePath, const char *szAddFname, const char *szModExt=NULL)
 {
-
-	const char CharTbl[256] = {
-#if 0	// RTD2556 LCD Controller Board
-	//  0    1    2    3    4    5    6    7    8    9    a    b    c    d    e    f
-		'?', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E',	// 00
-		'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U',	// 10
-		'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k',	// 20
-		'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '?',	// 30
-		'?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?',	// 40
-		'?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '-', '?', '?', '?', '?',	// 50
-		'?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?',	// 60
-		'?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?',	// 70
-#else	// DELL P2314H
-	//  0    1    2    3    4    5    6    7    8    9    a    b    c    d    e    f
-		'?', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', ' ', 'C', 'D', 'E',	// 00
-		'F', '-', '.', 'I', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '?', '?',	// 10
-		'?', '?', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',	// 20
-		'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd',	// 30
-		'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',	// 40
-		'u', 'v', 'w', 'x', 'y', 'z', '?', '?', '?', '?', '?', '-', '?', '?', '?', '?',	// 50
-		'?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?',	// 60
-		'?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?', '?',	// 70
+	static char szPath[4096];
+	char	szDrive[256], szDir[256], szFilename[256], szExt[256];
+#ifdef WIN32
+	_splitpath(szBasePath, szDrive, szDir ,szFilename, szExt);
+	strcat(szFilename, szAddFname);
+	if (szModExt) strcpy(szExt, szModExt);
+	_makepath(szPath, szDrive, szDir, szFilename, szExt);
+#else
+	strcpy(szDir, szBasePath);
+	strcpy(szDir, dirname(szDir));
+	strcpy(szFilename, szBasePath);
+	strcpy(szFilename, basename(szFilename));
+	char *p = strchr(szFilename, '.');
+	if (p) {
+	    strcpy(szExt, p);
+	    *p = '\0';
+	}
+	else {
+	    strcpy(szExt, "");
+	}
+	if (szModExt) strcpy(szExt, szModExt);
+	strcpy(szPath, szDir);		
+	strcat(szPath, "/");
+	strcat(szPath, szFilename);
+	strcat(szPath, szAddFname);
+	strcat(szPath, szExt);
 #endif
-	};
-	int nStart = 0, nOffset = 0, nSize;
-	bool bHit = false;
-	for (int i=0+6; i<nLength-6; i++) {
-		for (int j=0; j<0x80; j++) {
-			if (buf[i+0] == '2'-'1'+j &&
-				buf[i+1] == '3'-'1'+j &&
-				buf[i+2] == '1'-'1'+j &&
-				buf[i+3] == '4'-'1'+j
-				/*
-				&& buf[i+4] == 'u'-'1'+j
-				&& buf[i+5] == 'm'-'1'+j
-				*/
-				) {
-				printf("buf[%x] j=%d Hit!\n", i, j);
-				bHit = true;
-				nStart = i;
-				nOffset = j;
-				//break;
-			}
-		}
-		//if (bHit) break;
-	}
-	//nStart = 0x345DA;
-	nStart = 0x4D98F;	// P2314H Model Name & Firmware Code
-	nSize = 32;
-	//nStart = 0x42000;	// P2314H Language
-	//nSize = 0x4400;
-	for (int i=nStart; i<nStart+nSize; i++) {
-		//int nChar = 'A'+buf[i]-nOffset;
-		int nChar = CharTbl[buf[i]];
-		if (isascii(nChar)) printf("%c", nChar);
-	}
+	return szPath;
 }
 
 template <typename T>
@@ -137,12 +125,17 @@ int FindModeTable(int nLength, int &nCount)
 	nCount = 0;
 
 L_RETRY:
-	int nInfoSize = sizeof(T_Info);
+	int nInfoSize = sizeof(T);
 	for (int i=nSearchStart; i<nLength-nInfoSize*2; i++) {
 		T *pInfo1 = (T *)&buf[i];
 		T *pInfo2 = (T*)&buf[i+nInfoSize];
 		short nWidth = ntohs(pInfo1->width);
+		short nHeight = ntohs(pInfo1->height);
+		short nHStart = ntohs(pInfo1->hstart);
+		short nVStart = ntohs(pInfo1->vstart);
 		if (640 <= nWidth && nWidth <= 4096 &&
+			200 <= nHeight && nHeight <= 2048 &&
+			nHStart < nWidth && nVStart < nHeight && 
 			5 <= pInfo1->htolerance && pInfo1->htolerance <= 10 &&
 			5 <= pInfo1->vtolerance && pInfo1->vtolerance <= 10 &&
 			5 <= pInfo2->htolerance && pInfo2->htolerance <= 10 &&
@@ -154,11 +147,11 @@ L_RETRY:
 
 	if (0 <= nStart) {
 		for (int i=0; i<999; i++) {
-			T_Info *pInfo = (T_Info *)&buf[nStart+nInfoSize*i];
+			T *pInfo = (T *)&buf[nStart+nInfoSize*i];
 			short nWidth = ntohs(pInfo->width);
 			short nHeight = ntohs(pInfo->height);
 			if (nWidth < 640 || 4096 < nWidth ||
-				nHeight < 240 || 2048 < nHeight) {
+				nHeight < 200 || 2048 < nHeight) {
 				break;
 			}
 			nCount++;
@@ -172,9 +165,9 @@ L_RETRY:
 	return nStart;
 }
 
-template <typename T>
-void DumpModeTableRecord(FILE *fpCsv, T *pInfo, int nNo, int nOffset)
+void DumpModeTableRecord(FILE *fpCsv, T_Info *pInfo, int nNo, int nOffset)
 {
+	char	szStr[1024], szWk[1024];
 	short	nWidth, nHeight, nHFreq, nVFreq, nHTotal, nVTotal, nHStart, nVStart;
 
 	nWidth = ntohs(pInfo->width);
@@ -186,43 +179,54 @@ void DumpModeTableRecord(FILE *fpCsv, T *pInfo, int nNo, int nOffset)
 	nHStart = ntohs(pInfo->hstart);
 	nVStart = ntohs(pInfo->vstart);
 
-	CString str;
-	str.AppendFormat(_T("%3d,0x%04X,"), nNo, nOffset);
-	str.AppendFormat(_T("0x%02X,"), pInfo->polarity);
-	if (pInfo->polarity & 1)	str+="HN_VN";
-	else					str+="     ";
-	str+=_T("|");
-	if (pInfo->polarity & 2)	str+="HP_VN";
-	else					str+="     ";
-	str+=_T("|");
-	if (pInfo->polarity & 4)	str+="HN_VP";
-	else					str+="     ";
-	str+=_T("|");
-	if (pInfo->polarity & 8)	str+="HP_VP";
-	else					str+="     ";
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nWidth);
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nHeight);
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nHFreq);
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nVFreq);
-	str+=_T(",");
-	str.AppendFormat(_T("%3d"), pInfo->htolerance);
-	str+=_T(",");
-	str.AppendFormat(_T("%3d"), pInfo->vtolerance);
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nHTotal);
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nVTotal);
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nHStart);
-	str+=_T(",");
-	str.AppendFormat(_T("%4d"), nVStart);
-	str+="\n";
+	sprintf(szStr, "%3d,0x%04X,", nNo, nOffset);
+	sprintf(szWk, "0x%02X,", pInfo->polarity); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nWidth); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHeight); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHFreq); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nVFreq); strcat(szStr, szWk);
+	sprintf(szWk, "%3d,", pInfo->htolerance); strcat(szStr, szWk);
+	sprintf(szWk, "%3d,", pInfo->vtolerance); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHTotal); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nVTotal); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHStart); strcat(szStr, szWk);
+	sprintf(szWk, "%4d\n", nVStart); strcat(szStr, szWk);
 
-	_fputts(str, fpCsv);
+	fputs(szStr, fpCsv);
+}
+
+void DumpModeTableRecord(FILE *fpCsv, T_Info_23 *pInfo, int nIdx, int nOffset)
+{
+	char	szStr[1024], szWk[1024];
+	short	nWidth, nHeight, nHFreq, nVFreq, nHTotal, nVTotal, nHStart, nVStart, nVCount;
+
+	nWidth = ntohs(pInfo->width);
+	nHeight = ntohs(pInfo->height);
+	nHFreq = ntohs(pInfo->hfreq);
+	nVFreq = ntohs(pInfo->vfreq);
+	nHTotal = ntohs(pInfo->htotal);
+	nVTotal = ntohs(pInfo->vtotal);
+	nHStart = ntohs(pInfo->hstart);
+	nVStart = ntohs(pInfo->vstart);
+	nVCount = ntohs(pInfo->vcount);
+
+	sprintf(szStr, "%3d,0x%04X,", nIdx, nOffset);
+	sprintf(szWk, "0x%02X,", pInfo->no); strcat(szStr, szWk);
+	sprintf(szWk, "0x%02X,", pInfo->type); strcat(szStr, szWk);
+	sprintf(szWk, "0x%02X,", pInfo->polarity); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nWidth); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHeight); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHFreq); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nVFreq); strcat(szStr, szWk);
+	sprintf(szWk, "%3d,", pInfo->htolerance); strcat(szStr, szWk);
+	sprintf(szWk, "%3d,", pInfo->vtolerance); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHTotal); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nVTotal); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nHStart); strcat(szStr, szWk);
+	sprintf(szWk, "%4d,", nVStart); strcat(szStr, szWk);
+	sprintf(szWk, "%4d\n", nVCount); strcat(szStr, szWk);
+
+	fputs(szStr, fpCsv);
 }
 
 template <typename T>
@@ -260,41 +264,102 @@ WORD	nVStart
 	return 0;
 }
 
-
-int _tmain(int argc, _TCHAR* argv[])
+int FindKey(BYTE key[], int nKeyLen)
 {
-	int i, ret, nFileLen, nModeTableCount, nOffset;
+	int nRet = -1;
+
+	for (int i=0; i<nFileLen-nKeyLen; i++) {
+		if (memcmp(&buf[i], key, nKeyLen) == 0) {
+			nRet = i;
+			break;
+		}
+	}
+
+	return nRet;
+}
+
+/**
+		1.水平同期信号幅のチェックを無効化
+		2.・プリセット画面高さのチェックを変更
+		2.i水色ジャック基板(LH-RD56)のiPad液晶用ファームのピクセルクロック上限・下限を変更
+
+		水平同期信号幅が水平同期幅の1/7を越える信号が表示できない
+		X68000のFantasy Zone 24KやFM TOWNSのスーパーリアル麻雀P2&P3が該当
+		P2314H,252B9,iPad液晶用基板などで効果ありそう
+*/
+bool ModifyFirmware(enModel model)
+{
+	bool	bRet = false;
+	int		nPosSyncWidthCheck, nPosVHeightCheck, nPosDClkMin;
+	BYTE	keyHSyncWidthCheck[] = {0xE0, 0xFA, 0xA3, 0xE0, 0xFB, 0x7C, 0x00, 0x7D, 0x07};
+	BYTE	keyVHeightCheck[] = {0x50, 0x12, 0xC3, 0xED, 0x94, 0xF0};
+	BYTE	keyDClkMin[] = {0x7F, 0x10, 0x7E, 0x15, 0x7D, 0x03, 0x7C, 0x00};	// 202000
+
+	nPosSyncWidthCheck = FindKey(keyHSyncWidthCheck, 9);
+	if (nPosSyncWidthCheck < 0) {
+		fprintf(stderr, "keyHSyncWidthCheck not find\n");
+		goto L_RET;
+	}
+
+	nPosVHeightCheck = FindKey(keyVHeightCheck, 6);
+	if (nPosVHeightCheck < 0) {
+		fprintf(stderr, "keyVHeightCheck not find\n");
+		goto L_RET;
+	}
+
+	nPosDClkMin = - 1;
+	if (model == LHRD56_IPAD97) {
+		nPosDClkMin = FindKey(keyDClkMin, 8);
+		if (nPosDClkMin < 0) {
+			fprintf(stderr, "keyDClkMin not find\n");
+			goto L_RET;
+		}
+	}
+
+	buf[nPosSyncWidthCheck+8] = 0x01;	// HSyncWidth*7 < HTotalのチェックを*1にして無効化
+	buf[nPosVHeightCheck+5] = 0xC8;		// VTotalHeightの下限を240->200に緩和
+	if (model == LHRD56_IPAD97) {
+		buf[nPosDClkMin+5] = 0x02;		// DClkMinを202000->136464に(50Hzだと170500くらいになるので)
+	}
+
+	bRet = true;
+
+L_RET:
+	return bRet;
+}
+
+int RTD2662ModeTableDump(const char *szPath, bool bModify)
+{
+	int i, ret, nModeTableCount, nOffset;
 	int	nIdxNo[MAX_INDEX] = {-1};
-	TCHAR	szPath[MAX_PATH], szDrive[_MAX_DRIVE], szDir[_MAX_DIR], szFilename[_MAX_FNAME], szExt[_MAX_EXT];
 	FILE *fp = NULL;
 	FILE *fpCsv = stdout;
 	FILE *fpOut = NULL;
 	enModel	model = UNKNOWN;
+	struct stat st;
+	char szFilePath[4096];
 
-	if (argc < 2) {
-		_ftprintf(stderr, _T("%s firmware-path (-modify)\n"), argv[0]);
-		ret = 0;
-		goto L_RET;
-	}
-	
-	fp = _tfopen(argv[1], _T("rb"));
+	strcpy(szFilePath, szPath);
+
+	fp = fopen(szFilePath, "rb");
 	if (!fp) {
-		_ftprintf(stderr, _T("can't open %s\n"), argv[1]);
+		fprintf(stderr, "can't open %s\n", szFilePath);
 		ret = 1;
 		goto L_RET;
 	}
 
-	nFileLen = _filelength(_fileno(fp));
+	stat(szFilePath, &st);
+	nFileLen = st.st_size;
 	buf = (BYTE *)malloc(nFileLen);
 	if (!buf) {
-		_ftprintf(stderr, _T("can't alloc memory %d\n"), nFileLen);
+		fprintf(stderr, "can't alloc memory %d\n", nFileLen);
 		ret = 3;
 		goto L_CLOSE_CSV;
 	}
 
 	ret = fread(buf, nFileLen, 1, fp);
 	if (!ret) {
-		_ftprintf(stderr, _T("can't read %s\n"), argv[1]);
+		fprintf(stderr, "can't read %s\n", szFilePath);
 		ret = 4;
 		goto L_FREE;
 	}
@@ -315,31 +380,33 @@ int _tmain(int argc, _TCHAR* argv[])
 	if (nModeTableStart < 0) {
 		nModeTableStart = FindModeTable<T_Info_23>(nFileLen, nModeTableCount);
 		if (nModeTableStart < 0) {
-			_ftprintf(stderr, _T("can't find mode table\n"));
+			fprintf(stderr, "can't find mode table\n");
 			ret = 5;
 			goto L_FREE;
 		}
 		model = RTD2668;
 	}
 
-	// P2314Hの画面ﾓｰﾄﾞと使用ﾌﾟﾘｾｯﾄﾃｰﾌﾞﾙNoの紐づけ
-	nIdxNo[X68_15K_I] = 0;
-	nIdxNo[X68_15K_P] = 1;
-	nIdxNo[X68_24K_I] = 4;
-	nIdxNo[X68_24K_P] = 6;
-	nIdxNo[X68_31K] = 24;
-	nIdxNo[X68_31K_MT] = 18;	// 元の800x600ﾌﾟﾘｾｯﾄを上書き
-	nIdxNo[X68_Dash] = 26;
-	nIdxNo[M72_RTYPE] = 27;
-	nIdxNo[FMT_Raiden] = 28;
-	// 38-43も使ってもよさそう
+	// P2314Hの画面ﾓｰﾄﾞと使用ﾌﾟﾘｾｯﾄﾃｰﾌﾞﾙNoの紐づけ 
+	nIdxNo[X68_15K_I] = 0;		//  0:640x350 31.5KHz/70Hz
+	nIdxNo[X68_15K_P] = 139;//1;		//  1;640x350 31.5KHz/70Hz
+	nIdxNo[X68_24K_I] = 4;		//  4:720x400 31.5KHz/70Hz
+	nIdxNo[X68_24K_P] = 5;		//  5:640x400 31.5KHz/70Hz
+	nIdxNo[X68_31K] = 6;		//  6:720x400 38.0KHz/85Hz
+	nIdxNo[X68_Memtest] = 7;	//  7:640x400 38.0KHz/85Hz
+	nIdxNo[X68_Dash] = 14;		// 14:720x480 29.8KHz/59.9Hz
+	nIdxNo[X68_FZ24K] = 16;		// 16:720x576 35.8KHz/60Hz
+	nIdxNo[X68_Druaga] = 17;	// 17:720x576 45.5KHz/75.6Hz
+	nIdxNo[FMT_Raiden] = 24;	// 24:832x624 49.7KHz/74.5Hz
+	nIdxNo[FMT_SRMP2PS] = 25;	// 25:848x480 31.0KHz/60Hz
+	nIdxNo[M72_RTYPE] = 26;		// 26:848x480 35.0KHz/70Hz
+	nIdxNo[MVS] = 27;			// 27:848x480 36.0KHz/72Hz
 
 	if (model == UNKNOWN) {
 		// ﾓﾃﾞﾙ自動判定 ModeTable開始位置から判定 中華液晶基板ではﾌｧｰﾑｳｪｱが頻繁に変わるからあまり意味なし
 		switch (nModeTableStart) {
 		case 0x200A:	// P2314H
 			model = P2314H;
-			//FindString(nFileLen);
 			break;
 		case 0x32A74:	// 252B9
 			model = PHI_252B9;
@@ -347,16 +414,13 @@ int _tmain(int argc, _TCHAR* argv[])
 			break;
 		case 0x5819:	// LH-RD56(V+H)-01 例のiPad9.7型液晶を使用した15KHzモニタ用 2048x1536.bin
 			model = LHRD56_IPAD97;
-			nIdxNo[X68_15K_I] = 0;
-			nIdxNo[X68_15K_P] = 1;
-			nIdxNo[X68_24K_I] = 4;
-			nIdxNo[X68_24K_P] = 6;
-			nIdxNo[X68_31K] = 25;
-			nIdxNo[X68_31K_MT] = 19;	// 元の800x600ﾌﾟﾘｾｯﾄを上書き
-			nIdxNo[X68_Dash] = 27;
-			nIdxNo[M72_RTYPE] = 28;
-			nIdxNo[FMT_Raiden] = 37;
-			// 38-43も使ってもよさそう
+			nIdxNo[X68_Dash] = 15;		// 15:720x480 29.8KHz/59.9Hz
+			nIdxNo[X68_FZ24K] = 17;		// 17:720x576 35.8KHz/60Hz
+			nIdxNo[X68_Druaga] = 18;	// 18:720x576 45.5KHz/75.6Hz
+			nIdxNo[FMT_Raiden] = 25;	// 25:832x624 49.7KHz/74.5Hz
+			nIdxNo[FMT_SRMP2PS] = 26;	// 26:848x480 31.0KHz/60Hz
+			nIdxNo[M72_RTYPE] = 27;		// 27:848x480 35.0KHz/70Hzs
+			nIdxNo[MVS] = 28;			// 28:848x480 36.0KHz/72Hz
 			break;
 		case 0xD97E:	// 同上 1366x768 UIは黒ジャックと同じ？
 			model = LHRD56_1366x768;
@@ -373,65 +437,91 @@ int _tmain(int argc, _TCHAR* argv[])
 			nIdxNo[X68_24K_I] = 4;
 			nIdxNo[X68_24K_P] = 13;
 			nIdxNo[X68_31K] = 18;
-			nIdxNo[X68_31K_MT] = 9;	// 元の800x600ﾌﾟﾘｾｯﾄを上書き
+			nIdxNo[X68_Memtest] = 19;
 			nIdxNo[X68_Dash] = 20;
-			nIdxNo[M72_RTYPE] = 21;
-			nIdxNo[FMT_Raiden] = 22;
-			// 22-31が空き
+			nIdxNo[X68_FZ24K] = 21;
+			nIdxNo[X68_Druaga] = 22;
+			nIdxNo[FMT_Raiden] = 23;
+			nIdxNo[FMT_SRMP2PS] = 24;
+			nIdxNo[M72_RTYPE] = 25;
+			nIdxNo[MVS] = 26;
 			break;
 		}
 	}
 	
-	_tsplitpath(argv[1], szDrive, szDir ,szFilename, szExt);
-	if (2 < argc && _tcsicmp(argv[2], _T("-modify")) == 0 &&
-		model != UNKNOWN && model != RTD2668) {
-		//										 Pol   Wid   Hei  HFrq VFrq HT VT HTot  VTot HSB  VSB
-  		SetParameter<T_Info>(nIdxNo[X68_15K_I],  0x1F,  512, 480, 159, 615, 5, 5,  608, 521,  78, 24);		// X68000  512x512 15KHz(interlace) -> 標準の480iﾌﾟﾘｾｯﾄが使用されるため無効
-		SetParameter<T_Info>(nIdxNo[X68_15K_P],  0x0F,  512, 240, 159, 615, 5, 5,  608, 260,  80, 12);		// X68000  512x240 15KHz
-		SetParameter<T_Info>(nIdxNo[X68_24K_I],  0x1F, 1024, 848, 246, 532, 5, 5, 1408, 931, 282, 46);		// X68000 1024x848 24KHz(interlace) 偶数・奇数ライン逆？
-		SetParameter<T_Info>(nIdxNo[X68_24K_P],  0x0F, 1024, 424, 246, 532, 5, 5, 1408, 465, 282, 23);		// X68000 1024x424 24KHz
-		SetParameter<T_Info>(nIdxNo[X68_31K],    0x0F,  768, 512, 314, 554, 5, 5, 1104, 568, 261, 32);		// X68000  768x512 31KHz
-		//SetParameter<T_Info>(nIdxNo[X68_31K_MT], 0x0F,  768, 512, 338, 554, 5, 5, 1024, 613, 192, 35);		// X68000  768x512 31KHz memtest
-		SetParameter<T_Info>(nIdxNo[M72_RTYPE],  0x0F,  768, 256, 157, 550, 5, 5, 1024, 284, 156, 24);		// R-TYPE基板 15.7KHz/55Hz KAPPY.さん提供
-		SetParameter<T_Info>(nIdxNo[FMT_Raiden], 0x0F,  768, 512, 323, 603, 3, 3, 1104, 536, 240, 19);		// TOWNS 雷電伝説
-		//どうも縦像度240未満は動作しない？
-		//SetParameter<T_Info>(nIdxNo[FMT_Raiden]+1, 0x0F, 576, 224, 157, 591, 3, 3, 768, 263, 120, 24);		// MVS基板 15.7KHz/59.1Hz KAPPY.さん提供
+	if (bModify && model != UNKNOWN && model != RTD2668) {
 
-		_tcscat(szFilename, _T("_mod"));
-		_tmakepath(szPath, szDrive, szDir, szFilename, szExt);
-		fpOut = _tfopen(szPath, _T("wb"));
+#if 1
+		bModify = ModifyFirmware(model);
+		if (bModify) {
+			printf("*** modify firmware success ***\n");
+		}
+		else {
+			fprintf(stderr, "can't modify firmware\n");
+		}
+#else
+		bModify = false;
+#endif
+
+		//											Pol   Wid   Hei  HFrq VFrq HT VT HTot  VTot HSB  VSB
+  		//SetParameter<T_Info>(nIdxNo[X68_15K_I],		0x1F,  512, 480, 159, 615, 5, 5,  608, 521,  78, 24);		// X68000  512x512 15KHz(interlace) -> 標準の480iﾌﾟﾘｾｯﾄが使用されるため無効
+		SetParameter<T_Info>(nIdxNo[X68_15K_P],		0x0F, 1472, 240, 159, 615, 5, 5, 1716, 262, 238, 20);		// X68000  512x240 15KHz
+		SetParameter<T_Info>(nIdxNo[X68_24K_I],		0x1F, 1024, 848, 246, 532, 5, 5, 1408, 931, 282, 46);		// X68000 1024x848 24KHz(interlace) 偶数・奇数ライン逆？
+		SetParameter<T_Info>(nIdxNo[X68_24K_P],		0x0F, 1024, 424, 246, 532, 5, 5, 1408, 465, 282, 23);		// X68000 1024x424 24KHz
+		SetParameter<T_Info>(nIdxNo[X68_31K],		0x0F,  768, 512, 314, 554, 5, 5, 1104, 568, 261, 32);		// X68000  768x512 31KHz
+		SetParameter<T_Info>(nIdxNo[X68_Memtest],	0x0F,  768, 512, 340, 554, 5, 5, 1130, 613, 320, 41);		// X68000 memtest 31KHz
+		SetParameter<T_Info>(nIdxNo[X68_Dash],		0x0F,  768, 536, 315, 543, 5, 5, 1176, 580, 308, 38);		// X68000 ダッシュ野郎
+		SetParameter<T_Info>(nIdxNo[FMT_Raiden],	0x0F,  768, 512, 323, 603, 3, 3, 1104, 536, 240, 19);		// TOWNS 雷電伝説
+		SetParameter<T_Info>(nIdxNo[M72_RTYPE],		0x0F,  768, 256, 157, 550, 5, 5, 1024, 284, 156, 24);		// R-TYPE基板 15.7KHz/55Hz KAPPY.さん提供
+		if (bModify) {
+			SetParameter<T_Info>(nIdxNo[X68_FZ24K],		0x0F,  640, 448, 245, 524, 5, 5,  944, 469,  64, 10);		// X68000 Fantasy Zone 24KHz		※ModifyFirmwareが通用した場合のみ対応
+			SetParameter<T_Info>(nIdxNo[X68_Druaga],	0x0F,  672, 560, 315, 530, 5, 5, 1104, 595, 108, 31);		// X68000 Druaga 31KHz				※ModifyFirmwareが通用した場合のみ対応
+			SetParameter<T_Info>(nIdxNo[FMT_SRMP2PS],	0x0F,  736, 480, 320, 609, 3, 3,  896, 525, 144,  4);		// TOWNS スーパーリアル麻雀P2&P3	※ModifyFirmwareが通用した場合のみ対応
+			//どうも縦像度240未満の定義は動作しない？
+			//SetParameter<T_Info>(nIdxNo[MVS], 0x0F, 576, 224, 157, 591, 3, 3, 768, 263, 120, 24);				// MVS基板 15.7KHz/59.1Hz KAPPY.さん提供
+		}
+
+		strcpy(szFilePath, MakePath(szFilePath, "_mod"));
+		fpOut = fopen(szFilePath, "wb");
 		if (fpOut) {
 			ret = fwrite(buf, nFileLen, 1, fpOut);
 			if (!ret) {
-				_ftprintf(stderr, _T("can't write %s\n"), szPath);
+				fprintf(stderr, "can't write %s\n", szFilePath);
 			}
 			fclose(fpOut);
 		}
 		else {
-			_ftprintf(stderr, _T("can't open %s\n"), szPath);
+			fprintf(stderr, "can't open %s\n", szFilePath);
 		}
 	}
 
-	_tmakepath(szPath, szDrive, szDir, szFilename, _T(".csv"));
-	fpCsv = _tfopen(szPath, _T("wt"));
+	strcpy(szFilePath, MakePath(szFilePath, "", ".csv"));
+	fpCsv = fopen(szFilePath, "wt");
 	if (!fpCsv) {
-		_ftprintf(stderr, _T("can't open %s\n"), szPath);
+		fprintf(stderr, "can't open %s\n", szFilePath);
 		ret = 2;
 		goto L_CLOSE;
 	}
 	nOffset = nModeTableStart;
-					//   0	        1         2         3         4         5         6         7         8        
-					//   123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
-	_ftprintf(fpCsv, _T("No ,Offset,PF  ,PolarityFlag           ,W   ,H   ,HFrq,VFrq,HTl,VTl,HTot,VTot,HSta,VSta\n"));
+	if (model == RTD2668) {
+						//   0	        1         2         3         4         5         6         7         8        
+						//   123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+		fprintf(fpCsv, "Idx,Offset,No  ,Type,PF  ,W   ,H   ,HFrq,VFrq,HTl,VTl,HTot,VTot,HSta,VSta,IVCo\n");
+	}
+	else {
+						//   0	        1         2         3         4         5         6         7         8        
+						//   123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+		fprintf(fpCsv, "No ,Offset,PF  ,W   ,H   ,HFrq,VFrq,HTl,VTl,HTot,VTot,HSta,VSta\n");
+	}
 	for (i=0; i<nModeTableCount; i++) {
 		if (model == RTD2668) {
 			struct T_Info_23 *pInfo = (T_Info_23 *)&buf[nOffset];
-			DumpModeTableRecord<T_Info_23>(fpCsv, pInfo, i, nOffset);
+			DumpModeTableRecord(fpCsv, pInfo, i, nOffset);
 			nOffset += sizeof(T_Info_23);
 		}
 		else {
 			struct T_Info *pInfo = (T_Info *)&buf[nOffset];
-			DumpModeTableRecord<T_Info>(fpCsv, pInfo, i, nOffset);
+			DumpModeTableRecord(fpCsv, pInfo, i, nOffset);
 			nOffset += sizeof(T_Info);
 		}
 	}

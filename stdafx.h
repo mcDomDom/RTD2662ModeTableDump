@@ -1,24 +1,18 @@
-// stdafx.h : 標準のシステム インクルード ファイルのインクルード ファイル、または
-// 参照回数が多く、かつあまり変更されない、プロジェクト専用のインクルード ファイル
-// を記述します。
-//
-
 #pragma once
 
+#ifdef WIN32
 #include "targetver.h"
 
 #define _CRT_SECURE_NO_WARNINGS
+#endif
 
 #include <stdio.h>
-#include <tchar.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
-
-#define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS      // 一部の CString コンストラクターは明示的です。
-
-#include <atlbase.h>
-#include <atlstr.h>
-
-// TODO: プログラムに必要な追加ヘッダーをここで参照してください。
-#include <io.h>
+#ifdef WIN32
 #include <WinSock.h>
+#else
+#include <arpa/inet.h>
+#endif
 

@@ -304,7 +304,8 @@ bool ModifyFirmware(enModel model)
 	nPosVHeightCheck = FindKey(keyVHeightCheck, 6);
 	if (nPosVHeightCheck < 0) {
 		fprintf(stderr, "keyVHeightCheck not find\n");
-		goto L_RET;
+		//P2314Hにはなさそう？
+		//goto L_RET;
 	}
 
 	nPosDClkMin = - 1;
@@ -317,7 +318,7 @@ bool ModifyFirmware(enModel model)
 	}
 
 	buf[nPosSyncWidthCheck+8] = 0x01;	// HSyncWidth*7 < HTotalのチェックを*1にして無効化
-	buf[nPosVHeightCheck+5] = 0xC8;		// VTotalHeightの下限を240->200に緩和
+	if (0 <= nPosVHeightCheck) buf[nPosVHeightCheck+5] = 0xC8;		// VTotalHeightの下限を240->200に緩和
 	if (model == LHRD56_IPAD97) {
 		buf[nPosDClkMin+5] = 0x02;		// DClkMinを202000->136464に(50Hzだと170500くらいになるので)
 	}
@@ -447,6 +448,9 @@ int RTD2662ModeTableDump(const char *szPath, bool bModify)
 			nIdxNo[MVS] = 26;
 			break;
 		}
+	}
+	if (model == UNKNOWN) {
+		fprintf(stderr, "unknown firmware\n");
 	}
 	
 	if (bModify && model != UNKNOWN && model != RTD2668) {

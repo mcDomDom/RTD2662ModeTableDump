@@ -11,7 +11,7 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "%s firmware-path (-modify)\n", argv[0]);
 		goto L_RET;
 	}
-	else if (2 < argc && strcmp(argv[2], "-modify")) {
+	else if (2 < argc && strcmp(argv[2], "-modify")==0) {
 		bModify = true;
 	}
 	ret = RTD2662ModeTableDump(argv[1], bModify);
